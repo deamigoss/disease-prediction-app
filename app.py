@@ -25,6 +25,12 @@ import joblib
 import os
 
 
+@st.cache_resource
+def download_nltk_resources():
+    nltk.download('stopwords')
+
+download_nltk_resources()
+
 # --- Text Preprocessing ---
 def preprocess_text(text):
     # Convert to lowercase
@@ -47,10 +53,11 @@ def preprocess_text(text):
     
     return ' '.join(tokens)
 
+
 # --- Load & Preprocessing ---
 @st.cache_data
 def load_data():
-    data = pd.read_csv('Symptom2Disease.csv')
+    data = pd.read_csv('dataset.csv')
     data = data.drop(columns=['Unnamed: 0'], errors='ignore')
     
     # Preprocess the text data
