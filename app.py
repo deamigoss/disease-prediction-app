@@ -260,6 +260,10 @@ def train_model(model_type, X_train, y_train, num_classes):
         model.fit(X_train, y_train)
         return model
 
+# Initialize model_metrics in session state if it doesn't exist
+if 'model_metrics' not in st.session_state:
+    st.session_state.model_metrics = {}
+
 # --- Model Training ---
 if selected_model != st.session_state.get('current_model_type'):
     # Clear previous model
