@@ -290,8 +290,8 @@ if selected_model != st.session_state.get('current_model_type'):
             
             # Prepare training data
             if selected_model == "ANN":
-                train_data = X_train_tfidf.toarray() if issparse(X_train_tfidf) else X_train_tfidf
-                test_data = X_test_tfidf.toarray() if issparse(X_test_tfidf) else X_test_tfidf
+                train_data = X_train_tfidf if isinstance(X_train_tfidf, np.ndarray) else X_train_tfidf.toarray()
+                test_data = X_test_tfidf if isinstance(X_test_tfidf, np.ndarray) else X_test_tfidf.toarray()
             else:
                 train_data = X_train_tfidf
                 test_data = X_test_tfidf
