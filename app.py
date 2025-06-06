@@ -332,6 +332,7 @@ if st.checkbox("Tampilkan Distribusi Kelas"):
     st.bar_chart(class_dist)
 
 # Data exploration section
+translated_dict = dict(zip(label_encoder.classes_, translated_classes))
 expander = st.expander("Eksplorasi Data")
 with expander:
     tab1, tab2 = st.tabs(["Contoh Data", "Distribusi Penyakit"])
