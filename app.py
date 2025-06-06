@@ -15,6 +15,8 @@ from tensorflow.keras.optimizers import Adam
 from tensorflow.keras.callbacks import EarlyStopping
 from scipy.sparse import issparse
 from googletrans import Translator
+from datetime import datetime
+import pytz
 import streamlit as st
 import nltk
 from nltk.corpus import stopwords
@@ -25,7 +27,6 @@ import string
 import time
 import joblib
 import os
-
 import gc
 import time
 
@@ -303,10 +304,15 @@ if selected_model != st.session_state.get('current_model_type'):
                     y_pred = model.predict(test_data)
                 
                 accuracy = accuracy_score(y_test, y_pred)
+                
+                # Waktu Indonesia (WIB)
+                waktu_sekarang = datetime.now(pytz.timezone('Asia/Jakarta'))
+                format_waktu = waktu_sekarang.strftime("%Y-%m-%d %H:%M:%S")
+                
                 st.session_state.model_metrics[selected_model] = {
                     'accuracy': accuracy,
                     'training_time': time.time() - start_time,
-                    'last_trained': time.strftime("%Y-%m-%d %H:%M:%S")
+                    'last_trained': format_waktu
                 }
             
             st.success(f"Model {selected_model} berhasil dilatih!")
