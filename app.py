@@ -18,6 +18,7 @@ import streamlit as st
 import nltk
 from nltk.corpus import stopwords
 from nltk.stem import PorterStemmer
+import psutil
 import re
 import string
 import time
@@ -30,6 +31,7 @@ def download_nltk_resources():
     nltk.download('stopwords')
 
 download_nltk_resources()
+
 
 # --- Text Preprocessing ---
 def preprocess_text(text):
@@ -57,13 +59,11 @@ def preprocess_text(text):
 # --- Load & Preprocessing ---
 @st.cache_data(max_entries=1)
 def load_data():
-    data = pd.read_csv('dataset.csv')
-    data = data.drop(columns=['Unnamed: 0'], errors='ignore')
-    
-    # Preprocess the text data
-    data['processed_text'] = data['text'].apply(preprocess_text)
-    
-    return data
+    dtype = {
+        'column1': 'category',
+        'column2': 'float32'
+    }
+    return pd.read_csv('data.csv', dtype=dtype, usecols=['col1', 'col2'])
 
 data = load_data()
 
@@ -119,6 +119,7 @@ st.markdown("""
 Aplikasi ini menggunakan teknik NLP untuk memprediksi penyakit berdasarkan deskripsi gejala yang Anda berikan.
 """)
 
+
 # Sidebar for model selection and info
 with st.sidebar:
     st.header("Pengaturan Model")
@@ -149,6 +150,24 @@ with st.sidebar:
     # Buat dataframe dan tampilkan dalam sidebar
     df_labels_id = pd.DataFrame({'Penyakit': translated_classes})
     st.dataframe(df_labels_id, use_container_width=True)
+
+
+# Fungsi monitor memori
+def memory_usage_widget():
+    col1, col2, col3 = st.columns(3)
+    
+    process = psutil.Process(os.getpid())
+    mem = process.memory_info()
+    sys_mem = psutil.virtual_memory()
+    
+    col1.metric("App Memory Used", f"{mem.rss / (1024 ** 2):.1f} MB")
+    col2.metric("System Available", f"{sys_mem.available / (1024 ** 3):.1f} GB")
+    col3.metric("Memory Usage (%)", f"{sys_mem.percent}%")
+
+# Panggil di bagian utama app
+memory_usage_widget()
+
+
 
 # Initialize session state for models
 if 'models' not in st.session_state:
