@@ -320,19 +320,7 @@ if st.button("Prediksi Penyakit"):
                     tf.keras.backend.clear_session()
                 gc.collect()
 
-# Show sample data
-if st.checkbox("Tampilkan Contoh Data"):
-    st.subheader("Contoh Data Latih")
-    st.write(data[['text', 'label']].head(10))
-
-# Show class distribution
-if st.checkbox("Tampilkan Distribusi Kelas"):
-    st.subheader("Distribusi Penyakit dalam Dataset")
-    class_dist = data['label'].value_counts()
-    st.bar_chart(class_dist)
-
 # Data exploration section
-translated_dict = dict(zip(label_encoder.classes_, translated_classes))
 expander = st.expander("Eksplorasi Data")
 with expander:
     tab1, tab2 = st.tabs(["Contoh Data", "Distribusi Penyakit"])
@@ -344,12 +332,6 @@ with expander:
     with tab2:
         st.subheader("Distribusi Penyakit dalam Dataset")
         class_dist = data['label'].value_counts()
-        
-        # Translate class names for display
-        dist_df = pd.DataFrame({
-            'Penyakit': [translated_dict.get(i, i) for i in class_dist.index],
-            'Jumlah': class_dist.values
-        })
         
         st.bar_chart(dist_df.set_index('Penyakit'))
         st.dataframe(dist_df, use_container_width=True)
