@@ -341,14 +341,14 @@ with expander:
         st.write(data[['text', 'label']].head(10))
     
     with tab2:
-        st.subheader("Distribusi Penyakit dalam Dataset")
-        class_dist = data['label'].value_counts()
-        
-        # Translate class names for display
-        dist_df = pd.DataFrame({
-            'Penyakit': [translated_classes[i] for i in class_dist.index],
-            'Jumlah': class_dist.values
-        })
-        
-        st.bar_chart(dist_df.set_index('Penyakit'))
-        st.dataframe(dist_df, use_container_width=True)
+    st.subheader("Distribusi Penyakit dalam Dataset")
+    class_dist = data['label'].value_counts()
+    
+    # Translate class names for display
+    dist_df = pd.DataFrame({
+        'Penyakit': [translated_classes[i] for i in class_dist.index],
+        'Jumlah': class_dist.values
+    })
+    
+    st.bar_chart(dist_df.set_index('Penyakit'))
+    st.dataframe(dist_df, use_container_width=True)
