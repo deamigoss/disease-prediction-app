@@ -63,7 +63,7 @@ def load_data():
         'column1': 'category',
         'column2': 'float32'
     }
-    return pd.read_csv('data.csv', dtype=dtype, usecols=['col1', 'col2'])
+    return pd.read_csv('dataset.csv', dtype=dtype, usecols=['col1', 'col2'])
 
 data = load_data()
 
