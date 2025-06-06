@@ -208,6 +208,11 @@ with st.sidebar:
 
 
 # --- Model Building Functions ---
+if 'current_model' not in st.session_state:
+    st.session_state.current_model = None
+    st.session_state.current_model_type = None 
+    st.session_state.model_metrics = {}
+
 def build_ann_model(input_dim, output_dim):
     """Build and compile ANN model with optimized architecture"""
     model = Sequential([
