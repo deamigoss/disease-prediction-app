@@ -415,25 +415,30 @@ if st.button("Prediksi Penyakit"):
 if st.session_state.interaction_count % 3 == 0:
     manage_cache()
 
-# Data exploration section
+# ---Data Exploration Section ---
 expander = st.expander("Eksplorasi Data")
 with expander:
     tab1, tab2 = st.tabs(["Contoh Data", "Distribusi Penyakit"])
     
-with tab1:
-    st.subheader("Contoh Data Latih")
-    st.write(data[['text', 'label']].sample(10))  # Use sample instead of head
-
-with tab2:
-    st.subheader("Distribusi Penyakit dalam Dataset")
-    # Use value_counts with normalize=True to save memory
-    class_dist = data['label'].value_counts(normalize=True).reset_index()
-    class_dist.columns = ['Penyakit', 'Persentase']
+    with tab1:
+        st.subheader("Contoh Data Latih")
+        st.write(data[['text', 'label']].sample(10))  # Menggunakan sample() untuk contoh acak
     
-    # Translate only the top N diseases for display
-    top_n = min(10, len(class_dist))
-    class_dist_top = class_dist.head(top_n).copy()
-    class_dist_top['Penyakit'] = class_dist_top['Penyakit'].apply(translate_to_indonesian)
-    
-    st.bar_chart(class_dist_top.set_index('Penyakit'))
-    st.dataframe(class_dist_top, use_container_width=True)
+    with tab2:
+        st.subheader("Distribusi Penyakit dalam Dataset")
+        
+        # Hitung distribusi kelas
+        class_dist = data['label'].value_counts().reset_index()
+        class_dist.columns = ['Penyakit', 'Jumlah']
+        
+        # Ambil top 10 penyakit untuk efisiensi
+        class_dist_top = class_dist.head(10).copy()
+        
+        # Terjemahkan nama penyakit ke Bahasa Indonesia
+        class_dist_top['Penyakit'] = class_dist_top['Penyakit'].apply(
+            lambda x: translate_to_indonesian(x) if pd.notnull(x) else x
+        )
+        
+        # Tampilkan visualisasi
+        st.bar_chart(class_dist_top.set_index('Penyakit'))
+        st.dataframe(class_dist_top, use_container_width=True)
