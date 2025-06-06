@@ -272,28 +272,39 @@ if 'current_model' not in st.session_state:
     st.session_state.current_model_type = None
     st.session_state.model_metrics = {}
 
-# Check if model needs to be changed or trained
-if selected_model != st.session_state.current_model_type:
+# --- Model Training ---
+# --- Perbaikan Khusus untuk Error 'numpy.ndarray' object has no attribute 'toarray' ---
+
+if selected_model != st.session_state.get('current_model_type'):
     # Clear previous model
     with st.spinner('Membersihkan model sebelumnya...'):
-        if st.session_state.current_model_type == "ANN":
+        if st.session_state.get('current_model_type') == "ANN":
             tf.keras.backend.clear_session()
         st.session_state.current_model = None
         gc.collect()
-        manage_cache()  # Clear cache before loading new model
-    
+        manage_cache()
+
     # Train new model
     try:
         with st.spinner(f'Melatih model {selected_model}...'):
             start_time = time.time()
             
-            # Get the appropriate training data
-            if selected_model == "ANN":
-                train_data = X_train_tfidf.toarray()
-            else:
-                train_data = X_train_tfidf
+            # FIX: Penanganan data yang lebih aman
+            def safe_toarray(data):
+                if isinstance(data, np.ndarray):
+                    return data  
+                elif hasattr(data, 'toarray'):
+                    return data.toarray()  # Konversi sparse matrix ke array
+                return data  # Fallback
             
-            # Train the model
+            train_data = safe_toarray(X_train_tfidf)
+            test_data = safe_toarray(X_test_tfidf)
+            
+            if selected_model == "ANN":
+                train_data = safe_toarray(train_data)
+                test_data = safe_toarray(test_data)
+            
+            # Latih model
             model = train_model(
                 selected_model,
                 train_data,
@@ -301,30 +312,25 @@ if selected_model != st.session_state.current_model_type:
                 len(label_encoder.classes_)
             )
             
-            # Store in session state
+            # Update session state
             st.session_state.current_model = model
             st.session_state.current_model_type = selected_model
             
-            # Calculate and store training time
-            training_time = time.time() - start_time
-            st.session_state.model_metrics[selected_model] = {
-                'training_time': training_time,
-                'last_trained': time.strftime("%Y-%m-%d %H:%M:%S")
-            }
-            
-            # Evaluate model
+            # Evaluasi model
             with st.spinner('Evaluasi model...'):
                 if selected_model == "ANN":
-                    y_pred_probs = model.predict(X_test_tfidf.toarray())
-                    y_pred = np.argmax(y_pred_probs, axis=1)
+                    y_pred = model.predict(test_data).argmax(axis=1)
                 else:
-                    y_pred = model.predict(X_test_tfidf)
+                    y_pred = model.predict(test_data)
                 
                 accuracy = accuracy_score(y_test, y_pred)
-                st.session_state.model_metrics[selected_model]['accuracy'] = accuracy
+                st.session_state.model_metrics[selected_model] = {
+                    'accuracy': accuracy,
+                    'training_time': time.time() - start_time,
+                    'last_trained': time.strftime("%Y-%m-%d %H:%M:%S")
+                }
             
             st.success(f"Model {selected_model} berhasil dilatih!")
-            manage_cache()  # Clear cache after training
     
     except Exception as e:
         st.error(f"Gagal melatih model: {str(e)}")
