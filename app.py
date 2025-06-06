@@ -267,12 +267,6 @@ def train_model(model_type, X_train, y_train, num_classes):
         model.fit(X_train, y_train)
         return model
 
-# --- Model Management in Session State ---
-if 'current_model' not in st.session_state:
-    st.session_state.current_model = None
-    st.session_state.current_model_type = None
-    st.session_state.model_metrics = {}
-
 # --- Model Training ---
 if selected_model != st.session_state.get('current_model_type'):
     # Clear previous model
@@ -290,8 +284,9 @@ if selected_model != st.session_state.get('current_model_type'):
             
             # Prepare training data
             if selected_model == "ANN":
-                train_data = X_train_tfidf if isinstance(X_train_tfidf, np.ndarray) else X_train_tfidf.toarray()
-                test_data = X_test_tfidf if isinstance(X_test_tfidf, np.ndarray) else X_test_tfidf.toarray()
+                train_data = X_train_tfidf.toarray() if issparse(X_train_tfidf) else X_train_tfidf
+                test_data = X_test_tfidf.toarray() if issparse(X_test_tfidf) else X_test_tfidf
+
             else:
                 train_data = X_train_tfidf
                 test_data = X_test_tfidf
