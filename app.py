@@ -27,6 +27,14 @@ import os
 import gc
 from memory_profiler import profile
 
+
+st.set_page_config(
+    page_title="Sistem Prediksi Penyakit Berbasis Gejala",
+    page_icon="🩺",
+    layout="wide"
+)
+
+
 # Constants
 CLEAR_CACHE_EVERY = 15  # Clear cache every 15 interactions
 MEMORY_THRESHOLD_MB = 800  # Clear cache if memory exceeds 800MB
@@ -188,12 +196,6 @@ def translate_to_indonesian(text):
         return text
 
 # --- Streamlit App Layout ---
-st.set_page_config(
-    page_title="Sistem Prediksi Penyakit Berbasis Gejala",
-    page_icon="🩺",
-    layout="wide"
-)
-
 st.title("🩺 Sistem Prediksi Penyakit Berbasis Gejala")
 st.markdown("""
 Aplikasi ini menggunakan teknik NLP untuk memprediksi penyakit berdasarkan deskripsi gejala yang Anda berikan.
