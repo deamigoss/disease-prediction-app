@@ -25,9 +25,37 @@ import time
 import joblib
 import os
 
+# Cache management function
+def manage_cache():
+    """Intelligently manage cache based on interactions and memory usage"""
+    st.session_state.interaction_count += 1
+    
+    # Check memory usage using psutil
+    mem = psutil.Process().memory_info().rss / (1024 ** 2)
+    mem_threshold = MEMORY_THRESHOLD_MB
+    
+    # Check if we should clear cache
+    if (st.session_state.interaction_count % CLEAR_CACHE_EVERY == 0) or (mem > mem_threshold):
+        # Clear various caches
+        st.cache_data.clear()
+        st.cache_resource.clear()
+        
+        # Clear TensorFlow session if it exists
+        if 'models' in st.session_state and "ANN" in st.session_state.models:
+            tf.keras.backend.clear_session()
+        
+        # Force garbage collection
+        gc.collect()
+        
+        # Update tracking variables
+        st.session_state.last_cache_clear = time.time()
+        
+        # Show notification
+        reason = "memory threshold" if mem > mem_threshold else "periodic schedule"
+        st.toast(f"🧹 Cache cleared ({reason}) - Memory: {mem:.1f}MB", icon="✅")
 
 @st.cache_resource
-def download_nltk_resources():
+def download_nltk_resources(ttl = 3600):
     nltk.download('stopwords')
 
 download_nltk_resources()
@@ -302,3 +330,25 @@ if st.checkbox("Tampilkan Distribusi Kelas"):
     st.subheader("Distribusi Penyakit dalam Dataset")
     class_dist = data['label'].value_counts()
     st.bar_chart(class_dist)
+
+# Data exploration section
+expander = st.expander("Eksplorasi Data")
+with expander:
+    tab1, tab2 = st.tabs(["Contoh Data", "Distribusi Penyakit"])
+    
+    with tab1:
+        st.subheader("Contoh Data Latih")
+        st.write(data[['text', 'label']].head(10))
+    
+    with tab2:
+        st.subheader("Distribusi Penyakit dalam Dataset")
+        class_dist = data['label'].value_counts()
+        
+        # Translate class names for display
+        dist_df = pd.DataFrame({
+            'Penyakit': translated_classes(class_dist.index),
+            'Jumlah': class_dist.values
+        })
+        
+        st.bar_chart(dist_df.set_index('Penyakit'))
+        st.dataframe(dist_df, use_container_width=True)
