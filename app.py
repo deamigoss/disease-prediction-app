@@ -346,7 +346,7 @@ with expander:
         
         # Translate class names for display
         dist_df = pd.DataFrame({
-            'Penyakit': translated_classes(class_dist.index),
+            'Penyakit': [translated_classes[i] for i in class_dist.index],
             'Jumlah': class_dist.values
         })
         
