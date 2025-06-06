@@ -59,11 +59,13 @@ def preprocess_text(text):
 # --- Load & Preprocessing ---
 @st.cache_data(max_entries=1)
 def load_data():
-    dtype = {
-        'column1': 'category',
-        'column2': 'float32'
-    }
-    return pd.read_csv('dataset.csv', dtype=dtype, usecols=['col1', 'col2'])
+    data = pd.read_csv('dataset.csv')
+    data = data.drop(columns=['Unnamed: 0'], errors='ignore')
+    
+    # Preprocess the text data
+    data['processed_text'] = data['text'].apply(preprocess_text)
+    
+    return data
 
 data = load_data()
 
