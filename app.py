@@ -347,7 +347,7 @@ if current_model is not None and selected_model in st.session_state.model_metric
 # User input section
 st.subheader("Masukkan Gejala Anda")
 user_input = st.text_area(
-    "Deskripsikan gejala yang Anda alami dalam bahasa Indonesia:",
+    "Deskripsikan gejala yang Anda alami:",
     placeholder="Contoh: Saya mengalami demam tinggi, sakit kepala, dan nyeri otot..."
 )
 
