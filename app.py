@@ -267,7 +267,7 @@ def train_model(model_type, X_train, y_train, num_classes):
         model.fit(X_train, y_train)
         return model
 
-# --- Model Training ---
+# --- Model Training Fixed Version ---
 if selected_model != st.session_state.get('current_model_type'):
     # Clear previous model
     with st.spinner('Membersihkan model sebelumnya...'):
@@ -282,22 +282,47 @@ if selected_model != st.session_state.get('current_model_type'):
         with st.spinner(f'Melatih model {selected_model}...'):
             start_time = time.time()
             
+            # FIXED: Proper data type handling
+            def get_appropriate_data(data, for_ann=False):
+                if for_ann:
+                    if isinstance(data, np.ndarray):
+                        return data
+                    elif hasattr(data, 'toarray'):
+                        return data.toarray()
+                    else:
+                        return np.array(data)  # Fallback conversion
+                else:
+                    return data  # Return as-is for non-ANN models
+            
             # Prepare training data
-            if selected_model == "ANN":
-                train_data = X_train_tfidf.toarray() if issparse(X_train_tfidf) else X_train_tfidf
-                test_data = X_test_tfidf.toarray() if issparse(X_test_tfidf) else X_test_tfidf
-
-            else:
-                train_data = X_train_tfidf
-                test_data = X_test_tfidf
+            train_data = get_appropriate_data(X_train_tfidf, selected_model == "ANN")
+            test_data = get_appropriate_data(X_test_tfidf, selected_model == "ANN")
+            
+            # Debug info (optional)
+            st.write(f"Data type - Train: {type(train_data)}, Test: {type(test_data)}")
             
             # Train the model
-            model = train_model(
-                selected_model,
-                train_data,
-                y_train,
-                len(label_encoder.classes_)
-            )
+            if selected_model == "ANN":
+                model = Sequential([
+                    Dense(128, activation='relu', input_shape=(train_data.shape[1],)),
+                    Dropout(0.3),
+                    Dense(64, activation='relu'),
+                    Dropout(0.2),
+                    Dense(len(label_encoder.classes_), activation='softmax')
+                ])
+                model.compile(optimizer=Adam(0.001), 
+                            loss='sparse_categorical_crossentropy',
+                            metrics=['accuracy'])
+                model.fit(train_data, y_train, epochs=30, batch_size=16, verbose=0)
+            elif selected_model == "SVM":
+                model = SVC(kernel='linear', probability=True)
+                model.fit(train_data, y_train)
+            elif selected_model == "Random Forest":
+                model = RandomForestClassifier(n_estimators=50, max_depth=10)
+                model.fit(train_data, y_train)
+            elif selected_model == "Naive Bayes":
+                model = MultinomialNB()
+                model.fit(train_data, y_train)
             
             # Update session state
             st.session_state.current_model = model
