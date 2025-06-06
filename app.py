@@ -25,7 +25,20 @@ import time
 import joblib
 import os
 
-# Cache management function
+import gc
+import time
+
+
+MEMORY_THRESHOLD_MB = 500  # Set your memory threshold (MB)
+CLEAR_CACHE_EVERY = 5     # Clear cache every N interactions
+
+
+# Initialize session state for cache management
+if 'interaction_count' not in st.session_state:
+    st.session_state.interaction_count = 0
+if 'last_cache_clear' not in st.session_state:
+    st.session_state.last_cache_clear = time.time()
+
 def manage_cache():
     """Intelligently manage cache based on interactions and memory usage"""
     st.session_state.interaction_count += 1
@@ -85,14 +98,24 @@ def preprocess_text(text):
 
 
 # --- Load & Preprocessing ---
-@st.cache_data(max_entries=1, ttl=3600)
+@st.cache_data(max_entries=1, ttl=3600, show_spinner="Memuat dataset...")
 def load_data():
-    data = pd.read_csv('dataset.csv')
-    data = data.drop(columns=['Unnamed: 0'], errors='ignore')
+    # Load only necessary columns
+    cols = ['text', 'label']
+    data = pd.read_csv('dataset.csv', usecols=cols)
     
-    # Preprocess the text data
-    data['processed_text'] = data['text'].apply(preprocess_text)
+    # Drop NA values
+    data = data.dropna(subset=['text', 'label'])
     
+    # Preprocess in chunks if dataset is large
+    chunk_size = 1000
+    processed_texts = []
+    for i in range(0, len(data), chunk_size):
+        chunk = data.iloc[i:i+chunk_size]
+        processed_chunk = chunk['text'].apply(preprocess_text)
+        processed_texts.extend(processed_chunk)
+    
+    data['processed_text'] = processed_texts
     return data
 
 data = load_data()
@@ -125,6 +148,7 @@ model_options = {
 # --- Setup Translator ---
 translator = Translator()
 
+@st.cache_data(ttl=3600, max_entries=1000)
 def translate_to_english(text):
     try:
         time.sleep(0.5)  # Prevent rate limiting
@@ -134,6 +158,7 @@ def translate_to_english(text):
         st.error(f"Error translating to English: {e}")
         return text
 
+@st.cache_data(ttl=3600, max_entries=1000)
 def translate_to_indonesian(text):
     try:
         time.sleep(0.5)
@@ -182,79 +207,146 @@ with st.sidebar:
     st.dataframe(df_labels_id, use_container_width=True)
 
 
-# Initialize session state for models
-if 'models' not in st.session_state:
-    st.session_state.models = {}
-    st.session_state.current_model = None
+# --- Model Building Functions ---
+def build_ann_model(input_dim, output_dim):
+    """Build and compile ANN model with optimized architecture"""
+    model = Sequential([
+        Dense(128, activation='relu', input_shape=(input_dim,)),  # Reduced from 256
+        Dropout(0.3),  # Reduced from 0.5
+        Dense(64, activation='relu'),  # Reduced from 128
+        Dropout(0.2),  # Reduced from 0.3
+        Dense(output_dim, activation='softmax')
+    ])
+    
+    model.compile(
+        optimizer=Adam(learning_rate=0.001),
+        loss='sparse_categorical_crossentropy',
+        metrics=['accuracy']
+    )
+    return model
 
-# Train selected model only if not already trained
-if selected_model not in st.session_state.models:
-    if selected_model == "ANN":
-        with st.spinner('Melatih model ANN...'):
-            model = Sequential([
-                Dense(256, activation='relu', input_shape=(X_train_tfidf.shape[1],)),
-                Dropout(0.5),
-                Dense(128, activation='relu'),
-                Dropout(0.3),
-                Dense(len(label_encoder.classes_), activation='softmax')
-            ])
+def train_model(model_type, X_train, y_train, num_classes):
+    """Generic model training function with memory optimization"""
+    if model_type == "ANN":
+        model = build_ann_model(X_train.shape[1], num_classes)
+        early_stopping = EarlyStopping(patience=2, restore_best_weights=True)  # Reduced patience
+        
+        # Train with smaller batch size
+        history = model.fit(
+            X_train.toarray(), y_train,
+            epochs=50,  
+            batch_size=32, 
+            validation_split=0.1,  
+            callbacks=[early_stopping],
+            verbose=0
+        )
+        return model
+    
+    elif model_type == "SVM":
+        model = SVC(kernel='linear', probability=True, cache_size=200)  # Limited cache size
+        model.fit(X_train, y_train)
+        return model
+    
+    elif model_type == "Random Forest":
+        model = RandomForestClassifier(
+            n_estimators=50,
+            max_depth=10,   
+            n_jobs=1         
+        )
+        model.fit(X_train, y_train)
+        return model
+    
+    elif model_type == "Naive Bayes":
+        model = MultinomialNB()
+        model.fit(X_train, y_train)
+        return model
+
+# --- Model Management in Session State ---
+if 'current_model' not in st.session_state:
+    st.session_state.current_model = None
+    st.session_state.current_model_type = None
+    st.session_state.model_metrics = {}
+
+# Check if model needs to be changed or trained
+if selected_model != st.session_state.current_model_type:
+    # Clear previous model
+    with st.spinner('Membersihkan model sebelumnya...'):
+        if st.session_state.current_model_type == "ANN":
+            tf.keras.backend.clear_session()
+        st.session_state.current_model = None
+        gc.collect()
+        manage_cache()  # Clear cache before loading new model
+    
+    # Train new model
+    try:
+        with st.spinner(f'Melatih model {selected_model}...'):
+            start_time = time.time()
             
-            model.compile(
-                optimizer=Adam(learning_rate=0.001),
-                loss='sparse_categorical_crossentropy',
-                metrics=['accuracy']
+            # Get the appropriate training data
+            if selected_model == "ANN":
+                train_data = X_train_tfidf.toarray()
+            else:
+                train_data = X_train_tfidf
+            
+            # Train the model
+            model = train_model(
+                selected_model,
+                train_data,
+                y_train,
+                len(label_encoder.classes_)
             )
             
-            early_stopping = EarlyStopping(patience=3, restore_best_weights=True)
+            # Store in session state
+            st.session_state.current_model = model
+            st.session_state.current_model_type = selected_model
             
-            history = model.fit(
-                X_train_tfidf.toarray(), y_train,
-                epochs=50,
-                batch_size=32,
-                validation_split=0.2,
-                callbacks=[early_stopping],
-                verbose=0
-            )
+            # Calculate and store training time
+            training_time = time.time() - start_time
+            st.session_state.model_metrics[selected_model] = {
+                'training_time': training_time,
+                'last_trained': time.strftime("%Y-%m-%d %H:%M:%S")
+            }
             
-            st.session_state.models["ANN"] = model
-            st.session_state.current_model = "ANN"
+            # Evaluate model
+            with st.spinner('Evaluasi model...'):
+                if selected_model == "ANN":
+                    y_pred_probs = model.predict(X_test_tfidf.toarray())
+                    y_pred = np.argmax(y_pred_probs, axis=1)
+                else:
+                    y_pred = model.predict(X_test_tfidf)
+                
+                accuracy = accuracy_score(y_test, y_pred)
+                st.session_state.model_metrics[selected_model]['accuracy'] = accuracy
+            
+            st.success(f"Model {selected_model} berhasil dilatih!")
+            manage_cache()  # Clear cache after training
     
-    elif selected_model == "SVM":
-        with st.spinner('Melatih model SVM...'):
-            model = SVC(kernel='linear', probability=True)
-            model.fit(X_train_tfidf, y_train)
-            st.session_state.models["SVM"] = model
-            st.session_state.current_model = "SVM"
-    
-    elif selected_model == "Random Forest":
-        with st.spinner('Melatih model Random Forest...'):
-            model = RandomForestClassifier(n_estimators=100)
-            model.fit(X_train_tfidf, y_train)
-            st.session_state.models["Random Forest"] = model
-            st.session_state.current_model = "Random Forest"
-    
-    elif selected_model == "Naive Bayes":
-        with st.spinner('Melatih model Naive Bayes...'):
-            model = MultinomialNB()
-            model.fit(X_train_tfidf, y_train)
-            st.session_state.models["Naive Bayes"] = model
-            st.session_state.current_model = "Naive Bayes"
+    except Exception as e:
+        st.error(f"Gagal melatih model: {str(e)}")
+        st.session_state.current_model = None
+        st.session_state.current_model_type = None
 
 # Get the current model
-current_model = st.session_state.models.get(selected_model)
+current_model = st.session_state.current_model
 
-# Display model performance only if we have a trained model
-if current_model is not None:
-    st.subheader("Evaluasi Model")
+# Display model info if available
+if current_model is not None and selected_model in st.session_state.model_metrics:
+    metrics = st.session_state.model_metrics[selected_model]
     
-    if selected_model == "ANN":
-        y_pred_probs = current_model.predict(X_test_tfidf.toarray())
-        y_pred = np.argmax(y_pred_probs, axis=1)
-    else:
-        y_pred = current_model.predict(X_test_tfidf)
+    st.subheader("Informasi Model")
+    col1, col2, col3 = st.columns(3)
     
-    accuracy = accuracy_score(y_test, y_pred)
-    st.write(f"Akurasi pada Data Test: **{accuracy:.2f}**")
+    with col1:
+        st.metric("Model", selected_model)
+    
+    with col2:
+        st.metric("Akurasi", f"{metrics.get('accuracy', 0)*100:.1f}%")
+    
+    with col3:
+        st.metric("Waktu Training", f"{metrics.get('training_time', 0):.1f} detik")
+    
+    st.caption(f"Terakhir dilatih: {metrics.get('last_trained', 'N/A')}")
+
 
 # User input section
 st.subheader("Masukkan Gejala Anda")
@@ -264,6 +356,7 @@ user_input = st.text_area(
 )
 
 if st.button("Prediksi Penyakit"):
+    manage_cache()
     if not user_input:
         st.warning("Silakan masukkan deskripsi gejala terlebih dahulu.")
     elif current_model is None:
@@ -319,19 +412,28 @@ if st.button("Prediksi Penyakit"):
                 if selected_model == "ANN":
                     tf.keras.backend.clear_session()
                 gc.collect()
+if st.session_state.interaction_count % 3 == 0:
+    manage_cache()
 
 # Data exploration section
 expander = st.expander("Eksplorasi Data")
 with expander:
     tab1, tab2 = st.tabs(["Contoh Data", "Distribusi Penyakit"])
     
-    with tab1:
-        st.subheader("Contoh Data Latih")
-        st.write(data[['text', 'label']].head(10))
+with tab1:
+    st.subheader("Contoh Data Latih")
+    st.write(data[['text', 'label']].sample(10))  # Use sample instead of head
+
+with tab2:
+    st.subheader("Distribusi Penyakit dalam Dataset")
+    # Use value_counts with normalize=True to save memory
+    class_dist = data['label'].value_counts(normalize=True).reset_index()
+    class_dist.columns = ['Penyakit', 'Persentase']
     
-    with tab2:
-        st.subheader("Distribusi Penyakit dalam Dataset")
-        class_dist = data['label'].value_counts()
-        
-        st.bar_chart(dist_df.set_index('Penyakit'))
-        st.dataframe(dist_df, use_container_width=True)
+    # Translate only the top N diseases for display
+    top_n = min(10, len(class_dist))
+    class_dist_top = class_dist.head(top_n).copy()
+    class_dist_top['Penyakit'] = class_dist_top['Penyakit'].apply(translate_to_indonesian)
+    
+    st.bar_chart(class_dist_top.set_index('Penyakit'))
+    st.dataframe(class_dist_top, use_container_width=True)
