@@ -55,7 +55,7 @@ def preprocess_text(text):
 
 
 # --- Load & Preprocessing ---
-@st.cache_data
+@st.cache_data(max_entries=1)
 def load_data():
     data = pd.read_csv('dataset.csv')
     data = data.drop(columns=['Unnamed: 0'], errors='ignore')
@@ -280,9 +280,13 @@ if st.button("Prediksi Penyakit"):
                             disease_id = translate_to_indonesian(disease_en)
                             prob = pred_probs[0][idx]
                             st.write(f"- {disease_id} ({prob*100:.1f}%)")
-            
             except Exception as e:
-                st.error(f"Terjadi kesalahan saat memproses prediksi: {str(e)}")
+                st.error(f"Terjadi kesalahan saat prediksi: {str(e)}")
+            finally:
+                # Bersihkan memory
+                if selected_model == "ANN":
+                    tf.keras.backend.clear_session()
+                gc.collect()
 
 # Show sample data
 if st.checkbox("Tampilkan Contoh Data"):
