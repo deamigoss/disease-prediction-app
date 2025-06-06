@@ -273,8 +273,6 @@ if 'current_model' not in st.session_state:
     st.session_state.model_metrics = {}
 
 # --- Model Training ---
-# --- Perbaikan Khusus untuk Error 'numpy.ndarray' object has no attribute 'toarray' ---
-
 if selected_model != st.session_state.get('current_model_type'):
     # Clear previous model
     with st.spinner('Membersihkan model sebelumnya...'):
@@ -289,22 +287,15 @@ if selected_model != st.session_state.get('current_model_type'):
         with st.spinner(f'Melatih model {selected_model}...'):
             start_time = time.time()
             
-            # FIX: Penanganan data yang lebih aman
-            def safe_toarray(data):
-                if isinstance(data, np.ndarray):
-                    return data  
-                elif hasattr(data, 'toarray'):
-                    return data.toarray()  # Konversi sparse matrix ke array
-                return data  # Fallback
-            
-            train_data = safe_toarray(X_train_tfidf)
-            test_data = safe_toarray(X_test_tfidf)
-            
+            # Prepare training data
             if selected_model == "ANN":
-                train_data = safe_toarray(train_data)
-                test_data = safe_toarray(test_data)
+                train_data = X_train_tfidf.toarray() if issparse(X_train_tfidf) else X_train_tfidf
+                test_data = X_test_tfidf.toarray() if issparse(X_test_tfidf) else X_test_tfidf
+            else:
+                train_data = X_train_tfidf
+                test_data = X_test_tfidf
             
-            # Latih model
+            # Train the model
             model = train_model(
                 selected_model,
                 train_data,
@@ -316,7 +307,7 @@ if selected_model != st.session_state.get('current_model_type'):
             st.session_state.current_model = model
             st.session_state.current_model_type = selected_model
             
-            # Evaluasi model
+            # Evaluate model
             with st.spinner('Evaluasi model...'):
                 if selected_model == "ANN":
                     y_pred = model.predict(test_data).argmax(axis=1)
