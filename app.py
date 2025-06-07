@@ -161,26 +161,24 @@ def main():
         
         # Handle reboot sequence
         if st.session_state.get('reboot_requested', False):
-        # Clear the flag first
-        del st.session_state.reboot_requested
-        
-        # Show reboot message in a container
-        reboot_container = st.container()
-        with reboot_container:
-            st.success("✅ App successfully rebooted! Loading fresh session...")
+            # Clear the flag first
+            del st.session_state.reboot_requested
             
-            # Use progress bar instead of sleep
-            progress_bar = st.progress(0)
-            for i in range(100):
-                time.sleep(0.02)  # Small delay for smooth progress
-                progress_bar.progress(i + 1)
+            # Show reboot message in a container
+            reboot_container = st.container()
+            with reboot_container:
+                st.success("✅ App successfully rebooted! Loading fresh session...")
+                
+                # Use progress bar instead of sleep
+                progress_bar = st.progress(0)
+                for i in range(100):
+                    time.sleep(0.02)
+                    progress_bar.progress(i + 1)
+                
+                reboot_container.empty()
             
-            # Clear the container and rerun
-            reboot_container.empty()
-        
-        # Rerun to fresh state
-        st.rerun()
-        return  # Important to prevent further execution
+            st.rerun()
+            return
 
         # Load NLTK resources
         download_nltk_resources()
