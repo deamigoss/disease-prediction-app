@@ -230,7 +230,7 @@ def main():
 
             # Translate disease labels to Indonesian
             translated_classes = []
-            for disease in label_encoder.classes_[:20]:  # Limit to first 20 for performance
+            for disease in label_encoder.classes_:  # Limit to first 20 for performance
                 try:
                     translated = translate_to_indonesian(disease)
                     translated_classes.append(translated)
