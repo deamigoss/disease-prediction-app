@@ -31,8 +31,8 @@ import gc
 import time
 
 
-MEMORY_THRESHOLD_MB = 500  # Set your memory threshold (MB)
-CLEAR_CACHE_EVERY = 5     # Clear cache every N interactions
+MEMORY_THRESHOLD_MB = 400  # Set your memory threshold (MB)
+CLEAR_CACHE_EVERY = 3     # Clear cache every N interactions
 
 
 # Initialize session state for cache management
@@ -266,31 +266,62 @@ if 'model_metrics' not in st.session_state:
     st.session_state.model_metrics = {}
 
 # --- Model Training ---
+# Ganti bagian model training dengan:
 if selected_model != st.session_state.get('current_model_type'):
-    # Clear previous model
+    # Clear previous model more thoroughly
     with st.spinner('Membersihkan model sebelumnya...'):
-        if st.session_state.get('current_model_type') == "ANN":
-            tf.keras.backend.clear_session()
-        st.session_state.current_model = None
+        if 'current_model' in st.session_state:
+            if st.session_state.current_model_type == "ANN":
+                tf.keras.backend.clear_session()
+            del st.session_state.current_model
+            del st.session_state.current_model_type
         gc.collect()
         manage_cache()
 
-    # Train new model
+    # Train new model with memory constraints
     try:
         with st.spinner(f'Melatih model {selected_model}...'):
             start_time = time.time()
             
+            # Use smaller batch size for ANN
+            if selected_model == "ANN":
+                batch_size = 8  
+                epochs = 20    
+            else:
+                batch_size = None
+                
             # Prepare data
-            train_data = X_train_tfidf.toarray() if selected_model == "ANN" and hasattr(X_train_tfidf, 'toarray') else X_train_tfidf
-            test_data = X_test_tfidf.toarray() if selected_model == "ANN" and hasattr(X_test_tfidf, 'toarray') else X_test_tfidf
-            
-            # Train using the unified train_model function
-            model = train_model(
-                selected_model,
-                train_data,
-                y_train,
-                len(label_encoder.classes_)
-            )
+            if selected_model == "ANN":
+                # Process data in smaller chunks
+                chunk_size = 500
+                X_train_chunks = [X_train_tfidf[i:i+chunk_size].toarray() 
+                                for i in range(0, X_train_tfidf.shape[0], chunk_size)]
+                y_train_chunks = [y_train[i:i+chunk_size] 
+                                 for i in range(0, len(y_train), chunk_size)]
+                
+                model = build_ann_model(X_train_tfidf.shape[1], len(label_encoder.classes_))
+                early_stopping = EarlyStopping(patience=2, restore_best_weights=True)
+                
+                # Train in chunks
+                for X_chunk, y_chunk in zip(X_train_chunks, y_train_chunks):
+                    model.fit(
+                        X_chunk, y_chunk,
+                        epochs=epochs,
+                        batch_size=batch_size,
+                        validation_split=0.1,
+                        callbacks=[early_stopping],
+                        verbose=0
+                    )
+                    gc.collect()
+            else:
+                # For other models, use the original approach
+                train_data = X_train_tfidf
+                model = train_model(
+                    selected_model,
+                    train_data,
+                    y_train,
+                    len(label_encoder.classes_)
+                )
             
             # Update session state
             st.session_state.current_model = model
@@ -298,14 +329,21 @@ if selected_model != st.session_state.get('current_model_type'):
             
             # Evaluate model
             with st.spinner('Evaluasi model...'):
+                # Evaluate in chunks if ANN
                 if selected_model == "ANN":
-                    y_pred = model.predict(test_data).argmax(axis=1)
+                    chunk_size = 500
+                    y_preds = []
+                    for i in range(0, X_test_tfidf.shape[0], chunk_size):
+                        chunk = X_test_tfidf[i:i+chunk_size].toarray()
+                        y_pred_chunk = model.predict(chunk).argmax(axis=1)
+                        y_preds.extend(y_pred_chunk)
+                        gc.collect()
+                    y_pred = np.array(y_preds)
                 else:
-                    y_pred = model.predict(test_data)
+                    y_pred = model.predict(X_test_tfidf)
                 
                 accuracy = accuracy_score(y_test, y_pred)
                 
-                # Waktu Indonesia (WIB)
                 waktu_sekarang = datetime.now(pytz.timezone('Asia/Jakarta'))
                 format_waktu = waktu_sekarang.strftime("%Y-%m-%d %H:%M:%S")
                 
@@ -319,8 +357,11 @@ if selected_model != st.session_state.get('current_model_type'):
     
     except Exception as e:
         st.error(f"Gagal melatih model: {str(e)}")
-        st.session_state.current_model = None
-        st.session_state.current_model_type = None
+        if 'current_model' in st.session_state:
+            del st.session_state.current_model
+        if 'current_model_type' in st.session_state:
+            del st.session_state.current_model_type
+        gc.collect()
 
 # Get the current model
 current_model = st.session_state.current_model
