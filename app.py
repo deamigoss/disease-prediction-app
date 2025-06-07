@@ -153,13 +153,14 @@ def load_data():
 
 # --- Main App ---
 def main():
-    # Initial memory check before anything else
-    if get_memory_usage() > MEMORY_CRITICAL_MB * 0.8:
-        soft_reboot()
-        return
-    
-    # Handle reboot sequence
-    if st.session_state.get('reboot_requested', False):
+    try:
+        # Initial memory check before anything else
+        if get_memory_usage() > MEMORY_CRITICAL_MB * 0.8:
+            soft_reboot()
+            return
+        
+        # Handle reboot sequence
+        if st.session_state.get('reboot_requested', False):
         # Clear the flag first
         del st.session_state.reboot_requested
         
