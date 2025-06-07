@@ -53,21 +53,38 @@ def get_memory_usage():
 def soft_reboot():
     """Perform a soft reboot of the Streamlit app"""
     current_time = time.time()
-    if current_time - st.session_state.last_reboot < REBOOT_COOLDOWN:
-        st.warning(f"Reboot on cooldown. Please wait {int(REBOOT_COOLDOWN - (current_time - st.session_state.last_reboot))} seconds.")
+    time_since_last_reboot = current_time - st.session_state.last_reboot
+    
+    if time_since_last_reboot < REBOOT_COOLDOWN:
+        # Use st.empty() to create a placeholder for cooldown message
+        cooldown_placeholder = st.empty()
+        remaining_time = int(REBOOT_COOLDOWN - time_since_last_reboot)
+        
+        # Update countdown in real-time
+        for i in range(remaining_time, 0, -1):
+            cooldown_placeholder.warning(f"Reboot on cooldown. Please wait {i} seconds...")
+            time.sleep(1)
+        
+        cooldown_placeholder.empty()
         return False
     
-    st.session_state.last_reboot = current_time
-    st.warning("⚠️ Memory usage high. Performing automatic reboot...")
-    
-    # Clear all caches and session state
+    # Clear all caches and session state more thoroughly
+    st.session_state.clear()
     st.cache_data.clear()
     st.cache_resource.clear()
     tf.keras.backend.clear_session()
     gc.collect()
     
-    # Mark for reboot and use st.rerun() instead of experimental_rerun
-    st.session_state.reboot_requested = True
+    # Reset essential session state variables
+    st.session_state.update({
+        'interaction_count': 0,
+        'last_cache_clear': time.time(),
+        'last_reboot': time.time(),
+        'reboot_requested': True
+    })
+    
+    # Use st.rerun() with a small delay to ensure cleanup completes
+    time.sleep(0.5)
     st.rerun()
 
 def manage_memory():
@@ -140,9 +157,20 @@ def load_data():
 def main():
     # Check if reboot was requested
     if st.session_state.get('reboot_requested', False):
+        # Clear the reboot flag immediately
         del st.session_state.reboot_requested
-        st.success("App successfully rebooted!")
+        
+        # Use a placeholder for the success message
+        reboot_placeholder = st.empty()
+        reboot_placeholder.success("App successfully rebooted! Loading fresh session...")
+        
+        # Give time for user to see the message before continuing
         time.sleep(2)
+        reboot_placeholder.empty()
+        
+        # Force a fresh start by clearing any remaining state
+        st.session_state.clear()
+        st.rerun()
     
     try:
         # Initial memory check
