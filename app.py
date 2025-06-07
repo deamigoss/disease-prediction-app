@@ -53,36 +53,38 @@ def get_memory_usage():
 def soft_reboot():
     """Perform a soft reboot of the Streamlit app"""
     current_time = time.time()
+    time_since_last_reboot = current_time - st.session_state.last_reboot
     
-    # Check if we're in a cooldown period
-    if current_time - st.session_state.last_reboot < REBOOT_COOLDOWN:
-        # Show cooldown message without blocking
-        cooldown = st.empty()
-        remaining = int(REBOOT_COOLDOWN - (current_time - st.session_state.last_reboot))
-        cooldown.warning(f"Reboot on cooldown. Please wait {remaining} seconds...")
-        time.sleep(1)
-        cooldown.empty()
+    if time_since_last_reboot < REBOOT_COOLDOWN:
+        # Use st.empty() to create a placeholder for cooldown message
+        cooldown_placeholder = st.empty()
+        remaining_time = int(REBOOT_COOLDOWN - time_since_last_reboot)
+        
+        # Update countdown in real-time
+        for i in range(remaining_time, 0, -1):
+            cooldown_placeholder.warning(f"Reboot on cooldown. Please wait {i} seconds...")
+            time.sleep(1)
+        
+        cooldown_placeholder.empty()
         return False
     
-    # Mark the reboot time
-    st.session_state.last_reboot = current_time
-    
-    # Clear all caches and states
+    # Clear all caches and session state more thoroughly
+    st.session_state.clear()
     st.cache_data.clear()
     st.cache_resource.clear()
     tf.keras.backend.clear_session()
     gc.collect()
     
-    # Set reboot flag and clear critical variables
-    st.session_state.reboot_requested = True
+    # Reset essential session state variables
+    st.session_state.update({
+        'interaction_count': 0,
+        'last_cache_clear': time.time(),
+        'last_reboot': time.time(),
+        'reboot_requested': True
+    })
     
-    # IMPORTANT: Clear only necessary session state, keep essential config
-    keys_to_keep = ['interaction_count', 'last_cache_clear', 'last_reboot']
-    new_state = {k: st.session_state.get(k) for k in keys_to_keep}
-    st.session_state.clear()
-    st.session_state.update(new_state)
-    
-    # Rerun without delay to prevent UI stuck
+    # Use st.rerun() with a small delay to ensure cleanup completes
+    time.sleep(0.5)
     st.rerun()
 
 def manage_memory():
@@ -153,33 +155,28 @@ def load_data():
 
 # --- Main App ---
 def main():
-    # Initial memory check before anything else
-    if get_memory_usage() > MEMORY_CRITICAL_MB * 0.8:
-        soft_reboot()
-        return
-    
-    # Handle reboot sequence
+    # Check if reboot was requested
     if st.session_state.get('reboot_requested', False):
-        # Clear the flag first
+        # Clear the reboot flag immediately
         del st.session_state.reboot_requested
         
-        # Show reboot message in a container
-        reboot_container = st.container()
-        with reboot_container:
-            st.success("✅ App successfully rebooted! Loading fresh session...")
-            
-            # Use progress bar instead of sleep
-            progress_bar = st.progress(0)
-            for i in range(100):
-                time.sleep(0.02)  # Small delay for smooth progress
-                progress_bar.progress(i + 1)
-            
-            # Clear the container and rerun
-            reboot_container.empty()
+        # Use a placeholder for the success message
+        reboot_placeholder = st.empty()
+        reboot_placeholder.success("App successfully rebooted! Loading fresh session...")
         
-        # Rerun to fresh state
+        # Give time for user to see the message before continuing
+        time.sleep(2)
+        reboot_placeholder.empty()
+        
+        # Force a fresh start by clearing any remaining state
+        st.session_state.clear()
         st.rerun()
-        return  # Important to prevent further execution
+    
+    try:
+        # Initial memory check
+        if get_memory_usage() > MEMORY_CRITICAL_MB * 0.8:
+            soft_reboot()
+            return
 
         # Load NLTK resources
         download_nltk_resources()
