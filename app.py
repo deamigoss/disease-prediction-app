@@ -28,18 +28,17 @@ import time
 import joblib
 import os
 import gc
-import time
 import sys
-import subprocess
 
-# Configuration
-MEMORY_THRESHOLD_MB = 400  # Memory threshold for warnings (MB)
-MEMORY_CRITICAL_MB = 450   # Memory threshold for auto-reboot (MB)
-CLEAR_CACHE_EVERY = 3      # Clear cache every N interactions
-MAX_MODELS_IN_MEMORY = 1   # Only keep one model in memory at a time
-REBOOT_COOLDOWN = 60       # Minimum seconds between reboots
+# Configuration - Adjusted for Streamlit Cloud limits
+MEMORY_THRESHOLD_MB = 2000  # Warning threshold (2GB)
+MEMORY_CRITICAL_MB = 2500   # Critical threshold (2.5GB)
+CLEAR_CACHE_EVERY = 3       # Clear cache every N interactions
+MAX_MODELS_IN_MEMORY = 1    # Only keep one model in memory
+REBOOT_COOLDOWN = 60        # Minimum seconds between reboots
+CHUNK_SIZE = 500            # Processing chunk size for memory efficiency
 
-# Initialize session state for cache and reboot management
+# Initialize session state for memory management
 if 'interaction_count' not in st.session_state:
     st.session_state.interaction_count = 0
 if 'last_cache_clear' not in st.session_state:
@@ -67,10 +66,10 @@ def soft_reboot():
     tf.keras.backend.clear_session()
     gc.collect()
     
-    # Mark for reboot
+    # Mark for reboot and use st.rerun() instead of experimental_rerun
     st.session_state.reboot_requested = True
-    st.experimental_rerun()
-    
+    st.rerun()
+
 def manage_memory():
     """Monitor and manage memory usage"""
     mem = get_memory_usage()
@@ -88,7 +87,7 @@ def manage_memory():
         st.cache_resource.clear()
         
         # Clear TensorFlow session if it exists
-        if 'models' in st.session_state and "ANN" in st.session_state.models:
+        if 'current_model' in st.session_state and st.session_state.get('current_model_type') == "ANN":
             tf.keras.backend.clear_session()
         
         # Force garbage collection
@@ -102,66 +101,59 @@ def manage_memory():
         st.toast(f"🧹 Cache cleared ({reason}) - Memory: {mem:.1f}MB", icon="✅")
 
 @st.cache_resource
-def download_nltk_resources(ttl=3600):
+def download_nltk_resources():
     nltk.download('stopwords')
-
-download_nltk_resources()
 
 # --- Text Preprocessing ---
 def preprocess_text(text):
-    # Convert to lowercase
+    """Lightweight text preprocessing"""
     text = text.lower()
-    
-    # Remove punctuation
     text = re.sub(f'[{re.escape(string.punctuation)}]', '', text)
-    
-    # Remove numbers
     text = re.sub(r'\d+', '', text)
-    
-    # Remove extra whitespace
     text = ' '.join(text.split())
     
-    # Tokenization and stemming
-    stemmer = PorterStemmer()
-    stop_words = set(stopwords.words('english'))
-    tokens = text.split()
-    tokens = [stemmer.stem(word) for word in tokens if word not in stop_words]
-    
-    return ' '.join(tokens)
+    # Only stem if text is short to save memory
+    if len(text.split()) < 50:
+        stemmer = PorterStemmer()
+        stop_words = set(stopwords.words('english'))
+        tokens = [stemmer.stem(word) for word in text.split() if word not in stop_words]
+        return ' '.join(tokens)
+    return text
 
 # --- Load & Preprocessing ---
-@st.cache_data(max_entries=1, ttl=3600, show_spinner="Memuat dataset...")
+@st.cache_data(show_spinner="Memuat dataset...")
 def load_data():
-    # Load only necessary columns
+    # Load only necessary columns in chunks
     cols = ['text', 'label']
-    data = pd.read_csv('dataset.csv', usecols=cols)
+    chunks = pd.read_csv('dataset.csv', usecols=cols, chunksize=CHUNK_SIZE)
     
-    # Drop NA values
-    data = data.dropna(subset=['text', 'label'])
+    processed_chunks = []
+    for chunk in chunks:
+        chunk = chunk.dropna(subset=['text', 'label'])
+        chunk['processed_text'] = chunk['text'].apply(preprocess_text)
+        processed_chunks.append(chunk)
+        gc.collect()
     
-    # Preprocess in chunks if dataset is large
-    chunk_size = 1000
-    processed_texts = []
-    for i in range(0, len(data), chunk_size):
-        chunk = data.iloc[i:i+chunk_size]
-        processed_chunk = chunk['text'].apply(preprocess_text)
-        processed_texts.extend(processed_chunk)
-        # Clear memory after each chunk
-        if i % 5000 == 0:
-            gc.collect()
-    
-    data['processed_text'] = processed_texts
-    return data
+    return pd.concat(processed_chunks)
 
 # --- Main App ---
 def main():
     # Check if reboot was requested
-    if hasattr(st.session_state, 'reboot_requested'):
+    if st.session_state.get('reboot_requested', False):
         del st.session_state.reboot_requested
         st.success("App successfully rebooted!")
-        time.sleep(2)  # Give user time to see the message
+        time.sleep(2)
     
     try:
+        # Initial memory check
+        if get_memory_usage() > MEMORY_CRITICAL_MB * 0.8:
+            soft_reboot()
+            return
+
+        # Load NLTK resources
+        download_nltk_resources()
+        
+        # Load data
         data = load_data()
         
         # Split data
@@ -177,7 +169,7 @@ def main():
             X, y_encoded, test_size=0.2, random_state=42, stratify=y_encoded)
 
         # --- TF-IDF Vectorizer ---
-        tfidf_vectorizer = TfidfVectorizer(max_features=5000, ngram_range=(1, 2))
+        tfidf_vectorizer = TfidfVectorizer(max_features=3000, ngram_range=(1, 2))
         X_train_tfidf = tfidf_vectorizer.fit_transform(X_train)
         X_test_tfidf = tfidf_vectorizer.transform(X_test)
 
@@ -212,7 +204,7 @@ def main():
                 st.error(f"Error translating to Indonesian: {e}")
                 return text
 
-        # --- Streamlit UI (unchanged) ---
+        # --- Streamlit UI ---
         st.title("🩺 Sistem Prediksi Penyakit Berbasis Gejala")
         st.markdown("""
         Aplikasi ini menggunakan teknik NLP untuk memprediksi penyakit berdasarkan deskripsi gejala yang Anda berikan.
@@ -236,78 +228,25 @@ def main():
             st.markdown("---")
             st.markdown("**Daftar Penyakit:**")
 
-            # Terjemahkan label penyakit ke Bahasa Indonesia
+            # Translate disease labels to Indonesian
             translated_classes = []
-            for disease in label_encoder.classes_:
+            for disease in label_encoder.classes_[:20]:  # Limit to first 20 for performance
                 try:
                     translated = translate_to_indonesian(disease)
                     translated_classes.append(translated)
                 except:
                     translated_classes.append(disease)
             
-            # Buat dataframe dan tampilkan dalam sidebar
+            # Show diseases in sidebar
             df_labels_id = pd.DataFrame({'Penyakit': translated_classes})
             st.dataframe(df_labels_id, use_container_width=True)
 
-        # --- Model Building Functions ---
-        def build_ann_model(input_dim, output_dim):
-            """Build and compile ANN model with optimized architecture"""
-            model = Sequential([
-                Dense(128, activation='relu', input_shape=(input_dim,)),
-                Dropout(0.3),
-                Dense(64, activation='relu'),
-                Dropout(0.2),
-                Dense(output_dim, activation='softmax')
-            ])
-            
-            model.compile(
-                optimizer=Adam(learning_rate=0.001),
-                loss='sparse_categorical_crossentropy',
-                metrics=['accuracy']
-            )
-            return model
-
-        def train_model(model_type, X_train, y_train, num_classes):
-            """Generic model training function with memory optimization"""
-            if model_type == "ANN":
-                model = build_ann_model(X_train.shape[1], num_classes)
-                early_stopping = EarlyStopping(patience=2, restore_best_weights=True)
-                model.fit(
-                    X_train, y_train,
-                    epochs=30,
-                    batch_size=16,
-                    validation_split=0.1,
-                    callbacks=[early_stopping],
-                    verbose=0
-                )
-                return model
-            
-            elif model_type == "SVM":
-                model = SVC(kernel='linear', probability=True, cache_size=200)
-                model.fit(X_train, y_train)
-                return model
-            
-            elif model_type == "Random Forest":
-                model = RandomForestClassifier(
-                    n_estimators=50,
-                    max_depth=10,
-                    n_jobs=1
-                )
-                model.fit(X_train, y_train)
-                return model
-            
-            elif model_type == "Naive Bayes":
-                model = MultinomialNB()
-                model.fit(X_train, y_train)
-                return model
-
-        # Initialize model_metrics in session state if it doesn't exist
+        # --- Model Training ---
         if 'model_metrics' not in st.session_state:
             st.session_state.model_metrics = {}
 
-        # --- Model Training ---
         if selected_model != st.session_state.get('current_model_type'):
-            # Clear previous model more thoroughly
+            # Clear previous model
             with st.spinner('Membersihkan model sebelumnya...'):
                 if 'current_model' in st.session_state:
                     if st.session_state.current_model_type == "ANN":
@@ -322,62 +261,55 @@ def main():
                 with st.spinner(f'Melatih model {selected_model}...'):
                     start_time = time.time()
                     
-                    # Use smaller batch size for ANN
+                    # Memory check before training
+                    if get_memory_usage() > MEMORY_THRESHOLD_MB:
+                        soft_reboot()
+                        return
+                    
+                    # Train in chunks for ANN
                     if selected_model == "ANN":
-                        batch_size = 8  
-                        epochs = 20    
-                    else:
-                        batch_size = None
+                        model = Sequential([
+                            Dense(64, activation='relu', input_shape=(X_train_tfidf.shape[1],)),
+                            Dropout(0.3),
+                            Dense(32, activation='relu'),
+                            Dense(len(label_encoder.classes_), activation='softmax')
+                        ])
                         
-                    # Prepare data
-                    if selected_model == "ANN":
-                        # Process data in smaller chunks
-                        chunk_size = 500
-                        X_train_chunks = [X_train_tfidf[i:i+chunk_size].toarray() 
-                                        for i in range(0, X_train_tfidf.shape[0], chunk_size)]
-                        y_train_chunks = [y_train[i:i+chunk_size] 
-                                         for i in range(0, len(y_train), chunk_size)]
+                        model.compile(
+                            optimizer=Adam(learning_rate=0.001),
+                            loss='sparse_categorical_crossentropy',
+                            metrics=['accuracy']
+                        )
                         
-                        model = build_ann_model(X_train_tfidf.shape[1], len(label_encoder.classes_))
-                        early_stopping = EarlyStopping(patience=2, restore_best_weights=True)
-                        
-                        # Train in chunks
-                        for X_chunk, y_chunk in zip(X_train_chunks, y_train_chunks):
+                        # Train in smaller batches
+                        batch_size = 32
+                        for i in range(0, X_train_tfidf.shape[0], CHUNK_SIZE):
+                            chunk = X_train_tfidf[i:i+CHUNK_SIZE].toarray()
+                            y_chunk = y_train[i:i+CHUNK_SIZE]
                             model.fit(
-                                X_chunk, y_chunk,
-                                epochs=epochs,
+                                chunk, y_chunk,
+                                epochs=5,
                                 batch_size=batch_size,
-                                validation_split=0.1,
-                                callbacks=[early_stopping],
                                 verbose=0
                             )
                             gc.collect()
                     else:
-                        # For other models, use the original approach
-                        train_data = X_train_tfidf
-                        model = train_model(
-                            selected_model,
-                            train_data,
-                            y_train,
-                            len(label_encoder.classes_)
-                        )
+                        # For other models
+                        model = {
+                            "SVM": SVC(kernel='linear', probability=True, cache_size=200),
+                            "Random Forest": RandomForestClassifier(n_estimators=30, max_depth=5),
+                            "Naive Bayes": MultinomialNB()
+                        }[selected_model]
+                        model.fit(X_train_tfidf, y_train)
                     
-                    # Update session state
+                    # Store model
                     st.session_state.current_model = model
                     st.session_state.current_model_type = selected_model
                     
                     # Evaluate model
                     with st.spinner('Evaluasi model...'):
-                        # Evaluate in chunks if ANN
                         if selected_model == "ANN":
-                            chunk_size = 500
-                            y_preds = []
-                            for i in range(0, X_test_tfidf.shape[0], chunk_size):
-                                chunk = X_test_tfidf[i:i+chunk_size].toarray()
-                                y_pred_chunk = model.predict(chunk).argmax(axis=1)
-                                y_preds.extend(y_pred_chunk)
-                                gc.collect()
-                            y_pred = np.array(y_preds)
+                            y_pred = model.predict(X_test_tfidf.toarray()).argmax(axis=1)
                         else:
                             y_pred = model.predict(X_test_tfidf)
                         
@@ -416,12 +348,12 @@ def main():
                 st.metric("Model", selected_model)
             
             with col2:
-                st.metric("Akurasi", f"{metrics.get('accuracy', 0)*100:.1f}%")
+                st.metric("Akurasi", f"{metrics['accuracy']*100:.1f}%")
             
             with col3:
-                st.metric("Waktu Training", f"{metrics.get('training_time', 0):.1f} detik")
+                st.metric("Waktu Training", f"{metrics['training_time']:.1f} detik")
             
-            st.caption(f"Terakhir dilatih: {metrics.get('last_trained', 'N/A')}")
+            st.caption(f"Terakhir dilatih: {metrics['last_trained']}")
 
         # User input section
         st.subheader("Masukkan Gejala Anda")
@@ -439,93 +371,78 @@ def main():
             else:
                 with st.spinner('Memproses gejala dan membuat prediksi...'):
                     try:
-                        # Sub-spinner untuk translate
-                        with st.spinner('Menerjemahkan gejala...'):
-                            input_en = translate_to_english(user_input)
+                        # Memory check before prediction
+                        if get_memory_usage() > MEMORY_THRESHOLD_MB:
+                            soft_reboot()
+                            return
                         
-                        # Sub-spinner untuk preprocessing
-                        with st.spinner('Memproses teks...'):
-                            processed_input = preprocess_text(input_en)
-                            input_tfidf = tfidf_vectorizer.transform([processed_input])
+                        # Translate
+                        input_en = translate_to_english(user_input)
                         
-                        # Sub-spinner untuk prediksi
-                        with st.spinner('Menganalisis...'):
-                            if selected_model == "ANN":
-                                pred_probs = current_model.predict(input_tfidf.toarray())
-                                pred_class_idx = np.argmax(pred_probs, axis=1)[0]
-                                confidence = np.max(pred_probs)
-                            else:
-                                pred_probs = current_model.predict_proba(input_tfidf)
-                                pred_class_idx = current_model.predict(input_tfidf)[0]
-                                confidence = np.max(pred_probs)
-                            
-                            # Get predicted class
-                            pred_class_en = label_encoder.inverse_transform([pred_class_idx])[0]
-                            pred_class_id = translate_to_indonesian(pred_class_en)
+                        # Preprocess
+                        processed_input = preprocess_text(input_en)
+                        input_tfidf = tfidf_vectorizer.transform([processed_input])
+                        
+                        # Predict
+                        if selected_model == "ANN":
+                            pred_probs = current_model.predict(input_tfidf.toarray())
+                            pred_class_idx = np.argmax(pred_probs, axis=1)[0]
+                            confidence = np.max(pred_probs)
+                        else:
+                            pred_probs = current_model.predict_proba(input_tfidf)
+                            pred_class_idx = current_model.predict(input_tfidf)[0]
+                            confidence = np.max(pred_probs)
+                        
+                        # Get predicted class
+                        pred_class_en = label_encoder.inverse_transform([pred_class_idx])[0]
+                        pred_class_id = translate_to_indonesian(pred_class_en)
                         
                         # Display results
                         st.success("**Hasil Prediksi:**")
                         st.markdown(f"**Penyakit:** {pred_class_id}")
                         st.markdown(f"**Tingkat Kepercayaan:** {confidence*100:.1f}%")
                         
-                        # Show top 3 predictions if available
-                        if selected_model != "SVM":  # SVM's predict_proba can be unreliable
-                            st.markdown("**Kemungkinan Penyakit Lain:**")
+                        # Show top predictions if available
+                        if selected_model != "SVM" and len(pred_probs[0]) > 1:
                             top_n = min(3, len(label_encoder.classes_))
                             top_indices = np.argsort(pred_probs[0])[-top_n:][::-1]
                             
-                            for i, idx in enumerate(top_indices):
-                                if idx != pred_class_idx:
-                                    disease_en = label_encoder.inverse_transform([idx])[0]
-                                    disease_id = translate_to_indonesian(disease_en)
-                                    prob = pred_probs[0][idx]
-                                    st.write(f"- {disease_id} ({prob*100:.1f}%)")
+                            for i, idx in enumerate(top_indices[1:], 1):  # Skip first (main prediction)
+                                disease_en = label_encoder.inverse_transform([idx])[0]
+                                disease_id = translate_to_indonesian(disease_en)
+                                prob = pred_probs[0][idx]
+                                st.write(f"{i}. {disease_id} ({prob*100:.1f}%)")
                     except Exception as e:
                         st.error(f"Terjadi kesalahan saat prediksi: {str(e)}")
                     finally:
-                        # Bersihkan memory
                         if selected_model == "ANN":
                             tf.keras.backend.clear_session()
                         gc.collect()
 
-        # ---Data Exploration Section ---
+        # --- Data Exploration Section ---
         expander = st.expander("Eksplorasi Data")
         with expander:
             tab1, tab2 = st.tabs(["Contoh Data", "Distribusi Penyakit"])
             
             with tab1:
                 st.subheader("Contoh Data Latih")
-                st.write(data[['text', 'label']].sample(10))  # Menggunakan sample() untuk contoh acak
+                st.write(data[['text', 'label']].sample(5, random_state=42))  # Consistent sample
             
             with tab2:
                 st.subheader("Distribusi Penyakit dalam Dataset")
                 
-                # Hitung distribusi kelas
-                class_dist = data['label'].value_counts().reset_index()
+                # Calculate class distribution (top 10 only)
+                class_dist = data['label'].value_counts().nlargest(10).reset_index()
                 class_dist.columns = ['Penyakit', 'Jumlah']
                 
-                # Ambil top 10 penyakit untuk efisiensi
-                class_dist_top = class_dist.head(10).copy()
-                
-                # Terjemahkan nama penyakit ke Bahasa Indonesia
-                class_dist_top['Penyakit'] = class_dist_top['Penyakit'].apply(
-                    lambda x: translate_to_indonesian(x) if pd.notnull(x) else x
-                )
-                
-                # Tampilkan visualisasi
-                st.bar_chart(class_dist_top.set_index('Penyakit'))
-                st.dataframe(class_dist_top, use_container_width=True)
+                # Show visualization and table
+                st.bar_chart(class_dist.set_index('Penyakit'))
+                st.dataframe(class_dist, use_container_width=True)
 
     except Exception as e:
         st.error(f"Terjadi kesalahan kritis: {str(e)}")
-        if get_memory_usage() > MEMORY_CRITICAL_MB:
-            st.warning("Memory usage critical. Attempting auto-reboot...")
+        if get_memory_usage() > MEMORY_THRESHOLD_MB:
             soft_reboot()
 
-# Run the main function
 if __name__ == "__main__":
-    # Check memory before starting
-    if get_memory_usage() > MEMORY_CRITICAL_MB * 0.8:  # If we're already close to limit
-        soft_reboot()
-    else:
-        main()
+    main()
