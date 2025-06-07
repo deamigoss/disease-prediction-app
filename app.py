@@ -28,166 +28,229 @@ import time
 import joblib
 import os
 import gc
-import time
 
+# =============================================
+# Memory Management Configuration
+# =============================================
+MEMORY_THRESHOLD_MB = 500  # Memory limit in MB
+INACTIVITY_TIMEOUT = 300   # 5 minutes in seconds
+CLEAN_INTERVAL = 120        # 2 minutes in seconds
 
-MEMORY_THRESHOLD_MB = 400  # Set your memory threshold (MB)
-CLEAR_CACHE_EVERY = 3     # Clear cache every N interactions
+# Initialize session state for memory management
+if 'last_activity' not in st.session_state:
+    st.session_state.last_activity = time.time()
+if 'last_clean' not in st.session_state:
+    st.session_state.last_clean = time.time()
 
+# =============================================
+# Memory Management Functions
+# =============================================
+def update_activity():
+    """Update last activity timestamp"""
+    st.session_state.last_activity = time.time()
 
-# Initialize session state for cache management
-if 'interaction_count' not in st.session_state:
-    st.session_state.interaction_count = 0
-if 'last_cache_clear' not in st.session_state:
-    st.session_state.last_cache_clear = time.time()
-
-def manage_cache():
-    """Intelligently manage cache based on interactions and memory usage"""
-    st.session_state.interaction_count += 1
+def memory_cleanup():
+    """Perform comprehensive memory cleanup"""
+    # Clear Streamlit caches
+    st.cache_data.clear()
+    st.cache_resource.clear()
     
-    # Check memory usage using psutil
-    mem = psutil.Process().memory_info().rss / (1024 ** 2)
-    mem_threshold = MEMORY_THRESHOLD_MB
+    # Clear TensorFlow/Keras sessions
+    tf.keras.backend.clear_session()
     
-    # Check if we should clear cache
-    if (st.session_state.interaction_count % CLEAR_CACHE_EVERY == 0) or (mem > mem_threshold):
-        # Clear various caches
-        st.cache_data.clear()
-        st.cache_resource.clear()
-        
-        # Clear TensorFlow session if it exists
-        if 'models' in st.session_state and "ANN" in st.session_state.models:
-            tf.keras.backend.clear_session()
-        
-        # Force garbage collection
-        gc.collect()
-        
-        # Update tracking variables
-        st.session_state.last_cache_clear = time.time()
-        
-        # Show notification
-        reason = "memory threshold" if mem > mem_threshold else "periodic schedule"
-        st.toast(f"🧹 Cache cleared ({reason}) - Memory: {mem:.1f}MB", icon="✅")
+    # Remove large objects from session state
+    for key in list(st.session_state.keys()):
+        if key in ['current_model', 'tfidf_vectorizer', 'translator', 'models']:
+            del st.session_state[key]
+    
+    # Force garbage collection
+    gc.collect()
 
+def check_resources():
+    """Check memory usage and inactivity"""
+    current_time = time.time()
+    mem_usage = psutil.Process().memory_info().rss / (1024 ** 2)
+    
+    # Scheduled cleanup every CLEAN_INTERVAL
+    if current_time - st.session_state.last_clean > CLEAN_INTERVAL:
+        with st.spinner('Optimizing memory...'):
+            memory_cleanup()
+            st.session_state.last_clean = current_time
+            st.toast(f"🧹 Periodic memory cleanup (Usage: {mem_usage:.1f}MB)", icon="✅")
+    
+    # Emergency cleanup if memory threshold exceeded
+    if mem_usage > MEMORY_THRESHOLD_MB:
+        with st.spinner('Freeing up memory...'):
+            memory_cleanup()
+            st.toast(f"🚨 Emergency memory cleanup (Usage: {mem_usage:.1f}MB)", icon="⚠️")
+            st.session_state.last_clean = current_time
+    
+    # Full reset after inactivity period
+    if current_time - st.session_state.last_activity > INACTIVITY_TIMEOUT:
+        memory_cleanup()
+        st.rerun()
+
+# =============================================
+# Core Application Functions
+# =============================================
 @st.cache_resource
-def download_nltk_resources(ttl = 3600):
+def download_nltk_resources():
     nltk.download('stopwords')
 
-download_nltk_resources()
-
-
-# --- Text Preprocessing ---
 def preprocess_text(text):
-    # Convert to lowercase
+    """Clean and preprocess text"""
     text = text.lower()
-    
-    # Remove punctuation
     text = re.sub(f'[{re.escape(string.punctuation)}]', '', text)
-    
-    # Remove numbers
     text = re.sub(r'\d+', '', text)
-    
-    # Remove extra whitespace
     text = ' '.join(text.split())
     
-    # Tokenization and stemming
     stemmer = PorterStemmer()
     stop_words = set(stopwords.words('english'))
-    tokens = text.split()
-    tokens = [stemmer.stem(word) for word in tokens if word not in stop_words]
+    tokens = [stemmer.stem(word) for word in text.split() if word not in stop_words]
     
     return ' '.join(tokens)
 
-
-# --- Load & Preprocessing ---
-@st.cache_data(max_entries=1, ttl=3600, show_spinner="Memuat dataset...")
+@st.cache_data(max_entries=1, ttl=3600)
 def load_data():
-    # Load only necessary columns
-    cols = ['text', 'label']
-    data = pd.read_csv('dataset.csv', usecols=cols)
-    
-    # Drop NA values
+    """Load and preprocess data in memory-efficient chunks"""
+    data = pd.read_csv('dataset.csv', usecols=['text', 'label'])
     data = data.dropna(subset=['text', 'label'])
     
-    # Preprocess in chunks if dataset is large
-    chunk_size = 1000
+    # Process in smaller chunks
+    chunk_size = 500
     processed_texts = []
     for i in range(0, len(data), chunk_size):
         chunk = data.iloc[i:i+chunk_size]
-        processed_chunk = chunk['text'].apply(preprocess_text)
-        processed_texts.extend(processed_chunk)
+        processed_texts.extend(chunk['text'].apply(preprocess_text))
+        gc.collect()
     
     data['processed_text'] = processed_texts
     return data
 
-data = load_data()
+# =============================================
+# Model Training Functions
+# =============================================
+def build_lightweight_ann(input_dim, output_dim):
+    """Create optimized ANN model"""
+    model = Sequential([
+        Dense(64, activation='relu', input_shape=(input_dim,)),
+        Dropout(0.3),
+        Dense(32, activation='relu'),
+        Dense(output_dim, activation='softmax')
+    ])
+    model.compile(
+        optimizer=Adam(learning_rate=0.001),
+        loss='sparse_categorical_crossentropy',
+        metrics=['accuracy']
+    )
+    return model
 
-# Split data
-X = data['processed_text']
-y = data['label']
-
-# Encode labels
-label_encoder = LabelEncoder()
-y_encoded = label_encoder.fit_transform(y)
-
-# Split into train and test sets
-X_train, X_test, y_train, y_test = train_test_split(
-    X, y_encoded, test_size=0.2, random_state=42, stratify=y_encoded)
-
-# --- TF-IDF Vectorizer ---
-tfidf_vectorizer = TfidfVectorizer(max_features=5000, ngram_range=(1, 2))
-X_train_tfidf = tfidf_vectorizer.fit_transform(X_train)
-X_test_tfidf = tfidf_vectorizer.transform(X_test)
-
-# --- Model Selection ---
-model_options = {
-    "ANN": "Neural Network dengan Embedding",
-    "SVM": "Support Vector Machine",
-    "Random Forest": "Random Forest",
-    "Naive Bayes": "Multinomial Naive Bayes"
-}
+def train_model(model_type, X_train, y_train, num_classes):
+    """Memory-efficient model training"""
+    if model_type == "ANN":
+        model = build_lightweight_ann(X_train.shape[1], num_classes)
+        model.fit(
+            X_train, y_train,
+            epochs=15,
+            batch_size=8,
+            validation_split=0.1,
+            callbacks=[EarlyStopping(patience=2)],
+            verbose=0
+        )
+    elif model_type == "SVM":
+        model = SVC(kernel='linear', probability=True, cache_size=100)
+        model.fit(X_train, y_train)
+    elif model_type == "Random Forest":
+        model = RandomForestClassifier(n_estimators=30, max_depth=8, n_jobs=1)
+        model.fit(X_train, y_train)
+    elif model_type == "Naive Bayes":
+        model = MultinomialNB()
+        model.fit(X_train, y_train)
+    
+    return model
 
 # --- Setup Translator ---
 translator = Translator()
 
 @st.cache_data(ttl=3600, max_entries=1000)
 def translate_to_english(text):
+    """Translate Indonesian to English with error handling"""
     try:
-        time.sleep(0.5)  # Prevent rate limiting
+        time.sleep(0.3)  # Prevent rate limiting
         result = translator.translate(text, src='id', dest='en')
         return result.text
     except Exception as e:
-        st.error(f"Error translating to English: {e}")
-        return text
+        st.error(f"Error menerjemahkan ke Inggris: {e}")
+        return text  # Return original if translation fails
 
 @st.cache_data(ttl=3600, max_entries=1000)
 def translate_to_indonesian(text):
+    """Translate English to Indonesian with error handling"""
     try:
-        time.sleep(0.5)
+        time.sleep(0.3)
         result = translator.translate(text, src='en', dest='id')
         return result.text
     except Exception as e:
-        st.error(f"Error translating to Indonesian: {e}")
+        st.error(f"Error menerjemahkan ke Indonesia: {e}")
         return text
-
-# --- Streamlit App ---
-st.title("🩺 Sistem Prediksi Penyakit Berbasis Gejala")
-st.markdown("""
-Aplikasi ini menggunakan teknik NLP untuk memprediksi penyakit berdasarkan deskripsi gejala yang Anda berikan.
-""")
-
-
-# Sidebar for model selection and info
-with st.sidebar:
-    st.header("Pengaturan Model")
     
-    selected_model = st.selectbox(
-        "Pilih Model Klasifikasi",
-        list(model_options.keys()),
-        index=0
-    )
 
-    st.markdown("---")
+# =============================================
+# Streamlit UI and Main Application
+# =============================================
+def main():
+    # Initialize resources
+    download_nltk_resources()
+    check_resources()
+    update_activity()
+    
+    # Load data
+    data = load_data()
+    X = data['processed_text']
+    y = data['label']
+    
+    # Prepare models and vectorizer
+    label_encoder = LabelEncoder()
+    y_encoded = label_encoder.fit_transform(y)
+    X_train, X_test, y_train, y_test = train_test_split(
+        X, y_encoded, test_size=0.2, random_state=42, stratify=y_encoded)
+    
+    tfidf_vectorizer = TfidfVectorizer(max_features=3000, ngram_range=(1, 2))
+    X_train_tfidf = tfidf_vectorizer.fit_transform(X_train)
+    X_test_tfidf = tfidf_vectorizer.transform(X_test)
+    
+    # Model selection options
+    model_options = {
+        "Naive Bayes": "Multinomial Naive Bayes",
+        "SVM": "Support Vector Machine",
+        "Random Forest": "Random Forest",
+        "ANN": "Neural Network"
+    }
+    
+    # =============================================
+    # UI Components
+    # =============================================
+    st.title("🩺 Sistem Prediksi Penyakit Berbasis Gejala")
+    st.markdown("Aplikasi ini menggunakan teknik NLP untuk memprediksi penyakit berdasarkan deskripsi gejala.")
+    
+    # Sidebar
+    with st.sidebar:
+        st.header("Pengaturan Model")
+        selected_model = st.selectbox("Pilih Model", list(model_options.keys()), index=0)
+        
+        # Memory monitor
+        mem_usage = psutil.Process().memory_info().rss / (1024 ** 2)
+        st.metric("Memory Usage", f"{mem_usage:.1f} MB")
+        st.progress(
+            min(1.0, mem_usage/MEMORY_THRESHOLD_MB),
+            text=f"Memory usage: {mem_usage:.1f}/{MEMORY_THRESHOLD_MB}MB"
+        )
+        
+        if st.button("🔄 Force Memory Cleanup"):
+            memory_cleanup()
+            st.rerun()
+
+            st.markdown("---")
     st.markdown("**Informasi Dataset:**")
     st.write(f"Jumlah Data: {len(data)}")
     st.write(f"Jumlah Penyakit: {len(label_encoder.classes_)}")
@@ -207,250 +270,93 @@ with st.sidebar:
     # Buat dataframe dan tampilkan dalam sidebar
     df_labels_id = pd.DataFrame({'Penyakit': translated_classes})
     st.dataframe(df_labels_id, use_container_width=True)
-
-
-# --- Model Building Functions ---
-def build_ann_model(input_dim, output_dim):
-    """Build and compile ANN model with optimized architecture"""
-    model = Sequential([
-        Dense(128, activation='relu', input_shape=(input_dim,)),
-        Dropout(0.3),
-        Dense(64, activation='relu'),
-        Dropout(0.2),
-        Dense(output_dim, activation='softmax')
-    ])
     
-    model.compile(
-        optimizer=Adam(learning_rate=0.001),
-        loss='sparse_categorical_crossentropy',
-        metrics=['accuracy']
-    )
-    return model
-
-def train_model(model_type, X_train, y_train, num_classes):
-    """Generic model training function with memory optimization"""
-    if model_type == "ANN":
-        model = build_ann_model(X_train.shape[1], num_classes)
-        early_stopping = EarlyStopping(patience=2, restore_best_weights=True)
-        model.fit(
-            X_train, y_train,
-            epochs=30,
-            batch_size=16,
-            validation_split=0.1,
-            callbacks=[early_stopping],
-            verbose=0
-        )
-        return model
-    
-    elif model_type == "SVM":
-        model = SVC(kernel='linear', probability=True, cache_size=200)
-        model.fit(X_train, y_train)
-        return model
-    
-    elif model_type == "Random Forest":
-        model = RandomForestClassifier(
-            n_estimators=50,
-            max_depth=10,
-            n_jobs=1
-        )
-        model.fit(X_train, y_train)
-        return model
-    
-    elif model_type == "Naive Bayes":
-        model = MultinomialNB()
-        model.fit(X_train, y_train)
-        return model
-
-# Initialize model_metrics in session state if it doesn't exist
-if 'model_metrics' not in st.session_state:
-    st.session_state.model_metrics = {}
-
-# --- Model Training ---
-# Ganti bagian model training dengan:
-if selected_model != st.session_state.get('current_model_type'):
-    # Clear previous model more thoroughly
-    with st.spinner('Membersihkan model sebelumnya...'):
-        if 'current_model' in st.session_state:
-            if st.session_state.current_model_type == "ANN":
-                tf.keras.backend.clear_session()
-            del st.session_state.current_model
-            del st.session_state.current_model_type
-        gc.collect()
-        manage_cache()
-
-    # Train new model with memory constraints
-    try:
-        with st.spinner(f'Melatih model {selected_model}...'):
-            start_time = time.time()
+    # Main content
+    if selected_model != st.session_state.get('current_model_type'):
+        with st.spinner(f'Preparing {selected_model} model...'):
+            # Clean previous model
+            if 'current_model' in st.session_state:
+                if st.session_state.current_model_type == "ANN":
+                    tf.keras.backend.clear_session()
+                del st.session_state.current_model
+                gc.collect()
             
-            # Use smaller batch size for ANN
-            if selected_model == "ANN":
-                batch_size = 8  
-                epochs = 20    
-            else:
-                batch_size = None
-                
-            # Prepare data
-            if selected_model == "ANN":
-                # Process data in smaller chunks
-                chunk_size = 500
-                X_train_chunks = [X_train_tfidf[i:i+chunk_size].toarray() 
-                                for i in range(0, X_train_tfidf.shape[0], chunk_size)]
-                y_train_chunks = [y_train[i:i+chunk_size] 
-                                 for i in range(0, len(y_train), chunk_size)]
-                
-                model = build_ann_model(X_train_tfidf.shape[1], len(label_encoder.classes_))
-                early_stopping = EarlyStopping(patience=2, restore_best_weights=True)
-                
-                # Train in chunks
-                for X_chunk, y_chunk in zip(X_train_chunks, y_train_chunks):
-                    model.fit(
-                        X_chunk, y_chunk,
-                        epochs=epochs,
-                        batch_size=batch_size,
-                        validation_split=0.1,
-                        callbacks=[early_stopping],
-                        verbose=0
-                    )
-                    gc.collect()
-            else:
-                # For other models, use the original approach
-                train_data = X_train_tfidf
-                model = train_model(
-                    selected_model,
-                    train_data,
-                    y_train,
-                    len(label_encoder.classes_)
-                )
-            
-            # Update session state
-            st.session_state.current_model = model
-            st.session_state.current_model_type = selected_model
-            
-            # Evaluate model
-            with st.spinner('Evaluasi model...'):
-                # Evaluate in chunks if ANN
-                if selected_model == "ANN":
-                    chunk_size = 500
-                    y_preds = []
-                    for i in range(0, X_test_tfidf.shape[0], chunk_size):
-                        chunk = X_test_tfidf[i:i+chunk_size].toarray()
-                        y_pred_chunk = model.predict(chunk).argmax(axis=1)
-                        y_preds.extend(y_pred_chunk)
-                        gc.collect()
-                    y_pred = np.array(y_preds)
-                else:
-                    y_pred = model.predict(X_test_tfidf)
-                
-                accuracy = accuracy_score(y_test, y_pred)
-                
-                waktu_sekarang = datetime.now(pytz.timezone('Asia/Jakarta'))
-                format_waktu = waktu_sekarang.strftime("%Y-%m-%d %H:%M:%S")
-                
-                st.session_state.model_metrics[selected_model] = {
-                    'accuracy': accuracy,
-                    'training_time': time.time() - start_time,
-                    'last_trained': format_waktu
-                }
-            
-            st.success(f"Model {selected_model} berhasil dilatih!")
-    
-    except Exception as e:
-        st.error(f"Gagal melatih model: {str(e)}")
-        if 'current_model' in st.session_state:
-            del st.session_state.current_model
-        if 'current_model_type' in st.session_state:
-            del st.session_state.current_model_type
-        gc.collect()
-
-# Get the current model
-current_model = st.session_state.current_model
-
-# Display model info if available
-if current_model is not None and selected_model in st.session_state.model_metrics:
-    metrics = st.session_state.model_metrics[selected_model]
-    
-    st.subheader("Informasi Model")
-    col1, col2, col3 = st.columns(3)
-    
-    with col1:
-        st.metric("Model", selected_model)
-    
-    with col2:
-        st.metric("Akurasi", f"{metrics.get('accuracy', 0)*100:.1f}%")
-    
-    with col3:
-        st.metric("Waktu Training", f"{metrics.get('training_time', 0):.1f} detik")
-    
-    st.caption(f"Terakhir dilatih: {metrics.get('last_trained', 'N/A')}")
-
-
-# User input section
-st.subheader("Masukkan Gejala Anda")
-user_input = st.text_area(
-    "Deskripsikan gejala yang Anda alami:",
-    placeholder="Contoh: Saya mengalami demam tinggi, sakit kepala, dan nyeri otot..."
-)
-
-if st.button("Prediksi Penyakit"):
-    manage_cache()
-    if not user_input:
-        st.warning("Silakan masukkan deskripsi gejala terlebih dahulu.")
-    elif current_model is None:
-        st.error("Model belum dilatih. Silakan tunggu hingga proses training selesai.")
-    else:
-        with st.spinner('Memproses gejala dan membuat prediksi...'):
+            # Train new model
             try:
-                # Sub-spinner untuk translate
+                train_data = X_train_tfidf.toarray() if selected_model == "ANN" else X_train_tfidf
+                model = train_model(selected_model, train_data, y_train, len(label_encoder.classes_))
+                
+                # Store in session state
+                st.session_state.current_model = model
+                st.session_state.current_model_type = selected_model
+                st.success(f"Model {selected_model} siap digunakan!")
+            except Exception as e:
+                st.error(f"Gagal melatih model: {str(e)}")
+    
+    # Prediction interface
+    st.subheader("Masukkan Gejala Anda")
+    user_input = st.text_area(
+        "Deskripsikan gejala:",
+        placeholder="Contoh: Saya mengalami demam tinggi, sakit kepala...",
+        on_change=update_activity
+    )
+    
+if st.button("Prediksi Penyakit", on_click=update_activity):
+    if not user_input:
+        st.warning("Silakan masukkan deskripsi gejala")
+    elif 'current_model' not in st.session_state:
+        st.error("Model belum siap")
+    else:
+        with st.spinner('Memproses...'):
+            try:
+                # Langkah 1: Terjemahkan ke Inggris
                 with st.spinner('Menerjemahkan gejala...'):
                     input_en = translate_to_english(user_input)
                 
-                # Sub-spinner untuk preprocessing
+                # Langkah 2: Preprocessing
                 with st.spinner('Memproses teks...'):
                     processed_input = preprocess_text(input_en)
                     input_tfidf = tfidf_vectorizer.transform([processed_input])
                 
-                # Sub-spinner untuk prediksi
-                with st.spinner('Menganalisis...'):
+                # Langkah 3: Prediksi
+                with st.spinner('Menganalisis gejala...'):
                     if selected_model == "ANN":
-                        pred_probs = current_model.predict(input_tfidf.toarray())
-                        pred_class_idx = np.argmax(pred_probs, axis=1)[0]
-                        confidence = np.max(pred_probs)
+                        pred = st.session_state.current_model.predict(input_tfidf.toarray())
+                        pred_class = pred.argmax()
+                        confidence = pred.max()
                     else:
-                        pred_probs = current_model.predict_proba(input_tfidf)
-                        pred_class_idx = current_model.predict(input_tfidf)[0]
-                        confidence = np.max(pred_probs)
+                        pred = st.session_state.current_model.predict_proba(input_tfidf)
+                        pred_class = pred.argmax()
+                        confidence = pred.max()
                     
-                    # Get predicted class
-                    pred_class_en = label_encoder.inverse_transform([pred_class_idx])[0]
-                    pred_class_id = translate_to_indonesian(pred_class_en)
+                    # Langkah 4: Terjemahkan hasil kembali ke Indonesia
+                    disease_en = label_encoder.inverse_transform([pred_class])[0]
+                    disease_id = translate_to_indonesian(disease_en)
                 
-                # Display results
+                # Tampilkan hasil
                 st.success("**Hasil Prediksi:**")
-                st.markdown(f"**Penyakit:** {pred_class_id}")
+                st.markdown(f"**Penyakit:** {disease_id}")
                 st.markdown(f"**Tingkat Kepercayaan:** {confidence*100:.1f}%")
                 
-                # Show top 3 predictions if available
-                if selected_model != "SVM":  # SVM's predict_proba can be unreliable
-                    st.markdown("**Kemungkinan Penyakit Lain:**")
-                    top_n = min(3, len(label_encoder.classes_))
-                    top_indices = np.argsort(pred_probs[0])[-top_n:][::-1]
+                # Tampilkan 3 prediksi teratas (kecuali untuk SVM)
+                if selected_model != "SVM":
+                    st.markdown("**Kemungkinan Lain:**")
+                    top_indices = np.argsort(pred[0])[-3:][::-1]  # Ambil top 3
                     
-                    for i, idx in enumerate(top_indices):
-                        if idx != pred_class_idx:
+                    for idx in top_indices:
+                        if idx != pred_class:  # Skip hasil utama
                             disease_en = label_encoder.inverse_transform([idx])[0]
                             disease_id = translate_to_indonesian(disease_en)
-                            prob = pred_probs[0][idx]
+                            prob = pred[0][idx]
                             st.write(f"- {disease_id} ({prob*100:.1f}%)")
+                            
             except Exception as e:
-                st.error(f"Terjadi kesalahan saat prediksi: {str(e)}")
+                st.error(f"Terjadi kesalahan: {str(e)}")
             finally:
-                # Bersihkan memory
-                if selected_model == "ANN":
-                    tf.keras.backend.clear_session()
-                gc.collect()
-if st.session_state.interaction_count % 3 == 0:
-    manage_cache()
+                memory_cleanup()
+
+if __name__ == "__main__":
+    main()
 
 # ---Data Exploration Section ---
 expander = st.expander("Eksplorasi Data")
